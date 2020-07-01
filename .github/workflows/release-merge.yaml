@@ -1,0 +1,32 @@
+name: Merge release changes to master
+
+on:
+  push:
+    branches:
+      - release-*
+
+jobs:
+  release_branch_merge:
+    name: Merge release branch changes to master
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Merge release into master
+        run: |
+          git checkout master
+          git checkout -b merge-${{ github.sha }}
+          git merge --no-commit ${{ github.ref }}
+          git checkout --ours pkg/version/release.go
+          git add pkg/version/release.go
+          git merge --continue
+      - uses: actions/github-script@v2.0.0
+        name: Open PR to master
+        with:
+          script: |
+            await github.pulls.create({
+              ...context.repo,
+              title: `Merge ${github.ref} to master`,
+              head: "merge-release",
+              base: "master",
+            });
+
