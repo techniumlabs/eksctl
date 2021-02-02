@@ -3,6 +3,7 @@ package builder
 import (
 	"fmt"
 
+	"github.com/kris-nova/logger"
 	"github.com/weaveworks/eksctl/pkg/iam"
 
 	cfn "github.com/aws/aws-sdk-go/service/cloudformation"
@@ -201,8 +202,10 @@ func NewIAMServiceAccountResourceSet(spec *api.ClusterIAMServiceAccount, oidc *i
 // WithIAM returns true
 func (*IAMServiceAccountResourceSet) WithIAM() bool { return true }
 
-// WithNamedIAM returns false
-func (*IAMServiceAccountResourceSet) WithNamedIAM() bool { return false }
+// WithNamedIAM implements the ResourceSet interface
+func (rs *IAMServiceAccountResourceSet) WithNamedIAM() bool {
+	return rs.spec.RoleName != ""
+}
 
 // AddAllResources adds all resources for the stack
 func (rs *IAMServiceAccountResourceSet) AddAllResources() error {
@@ -219,10 +222,24 @@ func (rs *IAMServiceAccountResourceSet) AddAllResources() error {
 	role := &cft.IAMRole{
 		AssumeRolePolicyDocument: rs.oidc.MakeAssumeRolePolicyDocumentWithServiceAccountConditions(rs.spec.Namespace, rs.spec.Name),
 		PermissionsBoundary:      rs.spec.PermissionsBoundary,
+		RoleName:                 rs.spec.RoleName,
 	}
-	role.ManagedPolicyArns = append(role.ManagedPolicyArns, rs.spec.AttachPolicyARNs...)
+	for _, arn := range rs.spec.AttachPolicyARNs {
+		role.ManagedPolicyArns = append(role.ManagedPolicyArns, arn)
+	}
+
+	managedPolicies, customPolicies := createWellKnownPolicies(rs.spec.WellKnownPolicies)
+
+	for _, p := range managedPolicies {
+		role.ManagedPolicyArns = append(role.ManagedPolicyArns, makePolicyARN(p.name))
+	}
 
 	roleRef := rs.template.NewResource("Role1", role)
+
+	for _, p := range customPolicies {
+		doc := cft.MakePolicyDocument(p.Statements...)
+		rs.template.AttachPolicy(p.Name, roleRef, doc)
+	}
 
 	// TODO: declare output collector automatically when all stack builders migrated to our template package
 	rs.template.Outputs["Role1"] = cft.Output{
@@ -263,25 +280,31 @@ type IAMRoleResourceSet struct {
 	attachPolicyARNs []string
 	attachPolicy     api.InlineDocument
 	OutputRole       string
+	serviceAccount   string
+	namespace        string
 }
 
 // NewIAMServiceAccountResourceSet builds IAM Role stack from the give spec
-func NewIAMRoleResourceSetWithAttachPolicyARNs(name string, attachPolicyARNs []string, oidc *iamoidc.OpenIDConnectManager) *IAMRoleResourceSet {
+func NewIAMRoleResourceSetWithAttachPolicyARNs(name, namespace, serviceAccount string, attachPolicyARNs []string, oidc *iamoidc.OpenIDConnectManager) *IAMRoleResourceSet {
 	return &IAMRoleResourceSet{
 		template:         cft.NewTemplate(),
 		attachPolicyARNs: attachPolicyARNs,
 		name:             name,
 		oidc:             oidc,
+		serviceAccount:   serviceAccount,
+		namespace:        namespace,
 	}
 }
 
 // NewIAMServiceAccountResourceSet builds IAM Role stack from the give spec
-func NewIAMRoleResourceSetWithAttachPolicy(name string, attachPolicy api.InlineDocument, oidc *iamoidc.OpenIDConnectManager) *IAMRoleResourceSet {
+func NewIAMRoleResourceSetWithAttachPolicy(name, namespace, serviceAccount string, attachPolicy api.InlineDocument, oidc *iamoidc.OpenIDConnectManager) *IAMRoleResourceSet {
 	return &IAMRoleResourceSet{
-		template:     cft.NewTemplate(),
-		attachPolicy: attachPolicy,
-		name:         name,
-		oidc:         oidc,
+		template:       cft.NewTemplate(),
+		attachPolicy:   attachPolicy,
+		name:           name,
+		oidc:           oidc,
+		serviceAccount: serviceAccount,
+		namespace:      namespace,
 	}
 }
 
@@ -299,10 +322,21 @@ func (rs *IAMRoleResourceSet) AddAllResources() error {
 		templateDescriptionSuffix,
 	)
 
-	role := &cft.IAMRole{
-		AssumeRolePolicyDocument: rs.oidc.MakeAssumeRolePolicyDocument(),
+	var assumeRolePolicyDocument cft.MapOfInterfaces
+	if rs.serviceAccount != "" && rs.namespace != "" {
+		logger.Debug("service account location provided: %s/%s, adding sub condition", api.AWSNodeMeta.Namespace, api.AWSNodeMeta.Name)
+		assumeRolePolicyDocument = rs.oidc.MakeAssumeRolePolicyDocumentWithServiceAccountConditions(rs.namespace, rs.serviceAccount)
+	} else {
+		assumeRolePolicyDocument = rs.oidc.MakeAssumeRolePolicyDocument()
+
 	}
-	role.ManagedPolicyArns = append(role.ManagedPolicyArns, rs.attachPolicyARNs...)
+
+	role := &cft.IAMRole{
+		AssumeRolePolicyDocument: assumeRolePolicyDocument,
+	}
+	for _, arn := range rs.attachPolicyARNs {
+		role.ManagedPolicyArns = append(role.ManagedPolicyArns, arn)
+	}
 
 	roleRef := rs.template.NewResource("Role1", role)
 

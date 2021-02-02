@@ -67,7 +67,7 @@ var _ = Describe("template builder for IAM", func() {
 			Expect(t).To(HaveOutputWithValue("Role1", `{ "Fn::GetAtt": "Role1.Arn" }`))
 		})
 
-		It("can constuct an iamserviceaccount addon template with one inline policy", func() {
+		It("can construct an iamserviceaccount addon template with one inline policy", func() {
 			serviceAccount := &api.ClusterIAMServiceAccount{}
 
 			serviceAccount.Name = "sa-1"
@@ -120,6 +120,38 @@ var _ = Describe("template builder for IAM", func() {
         }`))
 
 			Expect(t).To(HaveOutputWithValue("Role1", `{ "Fn::GetAtt": "Role1.Arn" }`))
+		})
+
+		It("can construct an iamserviceaccount addon template with a custom role name", func() {
+			serviceAccount := &api.ClusterIAMServiceAccount{}
+
+			serviceAccount.Name = "sa-1"
+
+			serviceAccount.RoleName = "custom-role-name"
+
+			serviceAccount.AttachPolicy = cft.MakePolicyDocument(
+				cft.MapOfInterfaces{
+					"Effect": "Allow",
+					"Action": []string{
+						"s3:Get*",
+					},
+					"Resource": "*",
+				},
+			)
+
+			rs := NewIAMServiceAccountResourceSet(serviceAccount, oidc)
+
+			templateBody := []byte{}
+
+			Expect(rs).To(RenderWithoutErrors(&templateBody))
+
+			t := cft.NewTemplate()
+
+			Expect(t).To(LoadBytesWithoutErrors(templateBody))
+
+			Expect(rs.WithNamedIAM()).To(Equal(true))
+			Expect(t).To(HaveResource("Role1", "AWS::IAM::Role"))
+			Expect(t).To(HaveResourceWithPropertyValue("Role1", "RoleName", `"custom-role-name"`))
 		})
 
 		It("can constuct an iamserviceaccount addon template with two managed policies and one inline policy", func() {
@@ -222,6 +254,44 @@ var _ = Describe("template builder for IAM", func() {
 			Expect(t).To(HaveOutputWithValue("Role1", `{ "Fn::GetAtt": "Role1.Arn" }`))
 		})
 
+		It("can construct an iamserviceaccount addon template with wellKnownPolicies", func() {
+			serviceAccount := &api.ClusterIAMServiceAccount{}
+
+			serviceAccount.Name = "sa-1"
+
+			serviceAccount.WellKnownPolicies = api.WellKnownPolicies{
+				ImageBuilder: true,
+			}
+
+			appendServiceAccountToClusterConfig(cfg, serviceAccount)
+
+			rs := NewIAMServiceAccountResourceSet(serviceAccount, oidc)
+
+			templateBody := []byte{}
+
+			Expect(rs).To(RenderWithoutErrors(&templateBody))
+
+			t := cft.NewTemplate()
+
+			Expect(t).To(LoadBytesWithoutErrors(templateBody))
+
+			Expect(t.Description).To(Equal("IAM role for serviceaccount \"default/sa-1\" [created and managed by eksctl]"))
+
+			Expect(t.Resources).To(HaveLen(1))
+			Expect(t.Outputs).To(HaveLen(1))
+
+			Expect(t).To(HaveResource("Role1", "AWS::IAM::Role"))
+
+			Expect(t).To(HaveResourceWithPropertyValue("Role1", "AssumeRolePolicyDocument", expectedServiceAccountAssumeRolePolicyDocument))
+			Expect(t).To(HaveResourceWithPropertyValue("Role1", "ManagedPolicyArns", `[
+              {
+                "Fn::Sub": "arn:${AWS::Partition}:iam::aws:policy/AmazonEC2ContainerRegistryPowerUser"
+		      }
+            ]`))
+
+			Expect(t).To(HaveOutputWithValue("Role1", `{ "Fn::GetAtt": "Role1.Arn" }`))
+		})
+
 		It("can parse an iamserviceaccount addon template", func() {
 			t := cft.NewTemplate()
 
@@ -263,7 +333,7 @@ var _ = Describe("template builder for IAM", func() {
 		It("can construct an iamrole template with attachPolicyARNs", func() {
 			arns := []string{"arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess"}
 
-			rs := NewIAMRoleResourceSetWithAttachPolicyARNs("VPC-addon", arns, oidc)
+			rs := NewIAMRoleResourceSetWithAttachPolicyARNs("VPC-addon", "", "", arns, oidc)
 
 			templateBody := []byte{}
 
@@ -299,7 +369,7 @@ var _ = Describe("template builder for IAM", func() {
 				},
 			)
 
-			rs := NewIAMRoleResourceSetWithAttachPolicy("VPC-addon", attachPolicy, oidc)
+			rs := NewIAMRoleResourceSetWithAttachPolicy("VPC-addon", "", "", attachPolicy, oidc)
 
 			templateBody := []byte{}
 

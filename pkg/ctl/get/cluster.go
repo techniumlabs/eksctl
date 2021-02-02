@@ -74,6 +74,10 @@ func doGetCluster(cmd *cmdutils.Cmd, params *getCmdParams, listAllRegions bool) 
 		return err
 	}
 
+	if params.output == "table" && !listAllRegions {
+		cmdutils.LogRegionAndVersionInfo(cmd.ClusterConfig.Metadata)
+	}
+
 	if cfg.Metadata.Name == "" {
 		return getAndPrinterClusters(ctl, params, listAllRegions)
 	}
@@ -82,7 +86,6 @@ func doGetCluster(cmd *cmdutils.Cmd, params *getCmdParams, listAllRegions bool) 
 }
 
 func getAndPrinterClusters(ctl *eks.ClusterProvider, params *getCmdParams, listAllRegions bool) error {
-
 	printer, err := printers.NewPrinter(params.output)
 	if err != nil {
 		return err
